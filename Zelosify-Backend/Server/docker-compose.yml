@@ -2,7 +2,7 @@ name: zelosify-recruit-backend
 
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:15
     container_name: recruit-postgres
     restart: unless-stopped
     environment:

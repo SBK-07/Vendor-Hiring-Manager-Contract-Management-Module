@@ -32,6 +32,7 @@ model User {
 
   // Relation to tenant
   tenant          Tenants?     @relation(fields: [tenantId], references: [tenantId])
+  submittedProfiles VendorProfile[]
 
   @@unique([email, provider])
   @@index([tenantId])
@@ -44,6 +45,56 @@ model Tenants {
   updatedAt           DateTime  @updatedAt
 
   users               User[]
+  openings            Opening[]
+  vendorProfiles      VendorProfile[]
+}
+
+model Opening {
+  id                    String           @id @default(uuid())
+  tenantId              String
+  code                  String
+  title                 String
+  department            String
+  description           String?
+  location              String?
+  requiredSkills        String[]
+  experienceMinYears    Int              @default(0)
+  experienceMaxYears    Int              @default(0)
+  numberOfPositions     Int              @default(1)
+  status                OpeningStatus    @default(OPEN)
+  profilesSubmittedCount Int             @default(0)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  tenant                Tenants          @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  profiles              VendorProfile[]
+
+  @@index([tenantId, status])
+  @@unique([tenantId, code])
+}
+
+model VendorProfile {
+  id              String         @id @default(uuid())
+  openingId       String
+  tenantId        String
+  submittedById   String
+  candidateName   String
+  candidateEmail  String
+  candidatePhone  String?
+  totalExperience Float?
+  resumeFileName  String
+  resumeS3Key     String
+  status          ProfileStatus  @default(SUBMITTED)
+  submittedAt     DateTime       @default(now())
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  opening         Opening        @relation(fields: [openingId], references: [id], onDelete: Cascade)
+  tenant          Tenants        @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  submittedBy     User           @relation(fields: [submittedById], references: [id], onDelete: Restrict)
+
+  @@index([openingId, tenantId])
+  @@index([tenantId, submittedAt])
 }
 
 enum AuthProvider {
@@ -62,4 +113,16 @@ enum Role {
   PROCUREMENT_MANAGER
   RESOURCE_MANAGER
   VENDOR_MANAGER
+}
+
+enum OpeningStatus {
+  OPEN
+  CLOSED
+  ON_HOLD
+}
+
+enum ProfileStatus {
+  SUBMITTED
+  SHORTLISTED
+  REJECTED
 }

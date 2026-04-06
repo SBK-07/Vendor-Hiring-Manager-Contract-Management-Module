@@ -3,6 +3,7 @@ import {
   Settings,
   CreditCard,
   Headset,
+  BriefcaseBusiness,
   Smile,
   Scale3DIcon,
   Frown,
@@ -42,6 +43,7 @@ const getOverviewItemsByRole = (role) => {
     // For IT_VENDOR
     case "IT_VENDOR":
       return [
+        { title: "Openings", href: "/vendor/openings", icon: BriefcaseBusiness },
         { title: "Payments", href: "/vendor/payments", icon: CreditCard },
       ];
 

@@ -78,6 +78,7 @@ async function startServer() {
 
     // Handles vendor-specific routes
     app.use("/api/v1/vendor", vendorRoutes);
+    app.use("/api/vendor", vendorRoutes);
 
     // Hiring manager routes
     app.use("/api/v1/hiring-manager", hiringManagerRoutes);
