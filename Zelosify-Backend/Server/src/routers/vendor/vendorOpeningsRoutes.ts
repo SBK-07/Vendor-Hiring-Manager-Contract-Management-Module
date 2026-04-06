@@ -3,8 +3,10 @@ import { authenticateUser } from "../../middlewares/auth/authenticateMiddleware.
 import { authorizeRole } from "../../middlewares/auth/authorizeMiddleware.js";
 import {
   createProfileUploadPresign,
+  getUploadedProfilePreviewUrl,
   getVendorOpeningById,
   getVendorOpenings,
+  softDeleteUploadedProfile,
   submitUploadedProfile,
 } from "../../controllers/vendor/openings/vendorOpeningsController.js";
 
@@ -36,6 +38,20 @@ router.post(
   authenticateUser as RequestHandler,
   authorizeRole("IT_VENDOR") as RequestHandler,
   submitUploadedProfile as RequestHandler
+);
+
+router.patch(
+  "/profiles/:profileId/soft-delete",
+  authenticateUser as RequestHandler,
+  authorizeRole("IT_VENDOR") as RequestHandler,
+  softDeleteUploadedProfile as RequestHandler
+);
+
+router.get(
+  "/profiles/:profileId/preview",
+  authenticateUser as RequestHandler,
+  authorizeRole("IT_VENDOR") as RequestHandler,
+  getUploadedProfilePreviewUrl as RequestHandler
 );
 
 export default router;

@@ -1,5 +1,5 @@
-import LoginPage from "@/pages/LandingPage/auth/LoginPage";
+import LoginClientOnly from "./LoginClientOnly";
 
 export default function page() {
-  return <LoginPage />;
+  return <LoginClientOnly />;
 }

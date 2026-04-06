@@ -133,7 +133,10 @@ export class AwsStorageService extends StorageService {
     }
   }
 
-  async getUploadURL(key: string): Promise<string> {
+  async getUploadURL(
+    key: string,
+    contentType = "application/pdf"
+  ): Promise<string> {
     try {
       console.log("[AWS S3] Generating upload URL for:", {
         bucket: this.bucket,
@@ -144,7 +147,7 @@ export class AwsStorageService extends StorageService {
       const command = new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
-        ContentType: "application/pdf",
+        ContentType: contentType,
       });
 
       const url = await getSignedUrl(this.s3Client, command, {

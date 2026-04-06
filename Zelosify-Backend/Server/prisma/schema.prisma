@@ -32,7 +32,6 @@ model User {
 
   // Relation to tenant
   tenant          Tenants?     @relation(fields: [tenantId], references: [tenantId])
-  submittedProfiles VendorProfile[]
 
   @@unique([email, provider])
   @@index([tenantId])
@@ -46,55 +45,53 @@ model Tenants {
 
   users               User[]
   openings            Opening[]
-  vendorProfiles      VendorProfile[]
 }
 
 model Opening {
   id                    String           @id @default(uuid())
   tenantId              String
-  code                  String
   title                 String
-  department            String
   description           String?
   location              String?
-  requiredSkills        String[]
-  experienceMinYears    Int              @default(0)
-  experienceMaxYears    Int              @default(0)
-  numberOfPositions     Int              @default(1)
+  contractType          String?
+  hiringManagerId       String
+  experienceMin         Int
+  experienceMax         Int?
+  postedDate            DateTime         @default(now())
+  expectedCompletionDate DateTime?
+  actionDate            DateTime?
   status                OpeningStatus    @default(OPEN)
-  profilesSubmittedCount Int             @default(0)
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
 
   tenant                Tenants          @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
-  profiles              VendorProfile[]
+  hiringProfiles        hiringProfile[]
 
-  @@index([tenantId, status])
-  @@unique([tenantId, code])
+  @@index([tenantId])
 }
 
-model VendorProfile {
-  id              String         @id @default(uuid())
+model hiringProfile {
+  id              Int            @id @default(autoincrement())
   openingId       String
-  tenantId        String
-  submittedById   String
-  candidateName   String
-  candidateEmail  String
-  candidatePhone  String?
-  totalExperience Float?
-  resumeFileName  String
-  resumeS3Key     String
+  s3Key           String         @unique
+  uploadedBy      String
   status          ProfileStatus  @default(SUBMITTED)
+  shortlistedBy   String?
+  shortlistedAt   DateTime?
+  rejectedBy      String?
+  rejectedAt      DateTime?
+  recommended     Boolean?
+  recommendationScore Float?
+  recommendationReason String?
+  recommendationLatencyMs Int?
+  recommendationVersion String?
+  recommendationConfidence Float?
+  recommendedAt   DateTime?
+  isDeleted       Boolean        @default(false)
   submittedAt     DateTime       @default(now())
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
 
   opening         Opening        @relation(fields: [openingId], references: [id], onDelete: Cascade)
-  tenant          Tenants        @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
-  submittedBy     User           @relation(fields: [submittedById], references: [id], onDelete: Restrict)
 
-  @@index([openingId, tenantId])
-  @@index([tenantId, submittedAt])
+  @@index([openingId])
+  @@index([recommended])
 }
 
 enum AuthProvider {

@@ -16,9 +16,22 @@ export const decodeJwt = (token) => {
   }
 };
 
+// Returns true when JWT is missing exp or already expired.
+export const isTokenExpired = (token) => {
+  const decoded = decodeJwt(token);
+  if (!decoded || !decoded.exp) return true;
+
+  const currentEpochSeconds = Math.floor(Date.now() / 1000);
+  return decoded.exp <= currentEpochSeconds;
+};
+
 // Extract role from JWT token
 export const extractRoleFromToken = (token) => {
   if (!token) return null;
+
+  if (isTokenExpired(token)) {
+    return null;
+  }
 
   const decoded = decodeJwt(token);
   if (!decoded || !decoded.realm_access || !decoded.realm_access.roles) {

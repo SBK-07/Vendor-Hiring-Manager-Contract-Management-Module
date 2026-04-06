@@ -136,7 +136,7 @@ const useAuth = () => {
       }
 
       // Navigate to login page
-      router.push("/user");
+      router.push("/login");
       return result;
     } catch (error) {
       console.error("Logout error:", error);

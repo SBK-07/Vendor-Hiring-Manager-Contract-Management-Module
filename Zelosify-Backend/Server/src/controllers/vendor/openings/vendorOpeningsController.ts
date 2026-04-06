@@ -2,21 +2,38 @@ import type { Response } from "express";
 import { createStorageService } from "../../../services/storage/storageFactory.js";
 import prisma from "../../../config/prisma/prisma.js";
 import { sanitizeFilename } from "../../../helpers/vendorRequestValidation.js";
-import { getUserFolderPath } from "../../../utils/aws/getUserFolderPath.js";
 import type { AuthenticatedRequest } from "../../../types/typeIndex.js";
 
 const storageService = createStorageService();
 
+const SUPPORTED_EXTENSIONS = ["pdf", "pptx"] as const;
+const CONTENT_TYPES: Record<(typeof SUPPORTED_EXTENSIONS)[number], string> = {
+  pdf: "application/pdf",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+
+type UploadItem = {
+  fileName: string;
+};
+
 function getTenantContext(req: AuthenticatedRequest) {
   const tenantId = req.user?.tenant?.tenantId;
   const userId = req.user?.id;
-  const department = req.user?.department || "it_vendor";
 
   if (!tenantId || !userId) {
     return null;
   }
 
-  return { tenantId, userId, department };
+  return { tenantId, userId };
+}
+
+function getFileExtension(fileName: string): string {
+  const parts = fileName.split(".");
+  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+}
+
+function isSupportedExtension(ext: string): ext is (typeof SUPPORTED_EXTENSIONS)[number] {
+  return SUPPORTED_EXTENSIONS.includes(ext as any);
 }
 
 export const getVendorOpenings = async (
@@ -30,30 +47,85 @@ export const getVendorOpenings = async (
       return;
     }
 
-    const openings = await prisma.opening.findMany({
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+    const skip = (page - 1) * limit;
+
+    const [total, openings] = await Promise.all([
+      prisma.opening.count({
+        where: {
+          tenantId: context.tenantId,
+        },
+      }),
+      prisma.opening.findMany({
       where: {
         tenantId: context.tenantId,
       },
-      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+      orderBy: [{ status: "asc" }, { postedDate: "desc" }],
+      skip,
+      take: limit,
       select: {
         id: true,
-        code: true,
         title: true,
-        department: true,
+        contractType: true,
+        hiringManagerId: true,
         location: true,
-        requiredSkills: true,
-        experienceMinYears: true,
-        experienceMaxYears: true,
-        numberOfPositions: true,
+        experienceMin: true,
+        experienceMax: true,
+        postedDate: true,
+        expectedCompletionDate: true,
+        actionDate: true,
         status: true,
-        profilesSubmittedCount: true,
-        updatedAt: true,
+      },
+      }),
+    ]);
+
+    const managerIds = Array.from(
+      new Set(openings.map((opening) => opening.hiringManagerId))
+    );
+
+    const managerUsers = await prisma.user.findMany({
+      where: {
+        id: {
+          in: managerIds,
+        },
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        username: true,
       },
     });
 
+    const managerNameMap = new Map(
+      managerUsers.map((manager) => {
+        const fallback = manager.username || manager.id;
+        const fullName = [manager.firstName, manager.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        return [manager.id, fullName || fallback];
+      })
+    );
+
+    const rows = openings.map((opening) => ({
+      ...opening,
+      hiringManagerName:
+        managerNameMap.get(opening.hiringManagerId) || opening.hiringManagerId,
+    }));
+
+    const totalPages = Math.ceil(total / limit);
+
     res.status(200).json({
       message: "Openings fetched successfully",
-      data: openings,
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
     });
   } catch (error) {
     console.error("[Vendor Openings] Failed to fetch openings:", error);
@@ -79,29 +151,26 @@ export const getVendorOpeningById = async (
       },
       select: {
         id: true,
-        code: true,
         title: true,
-        department: true,
         description: true,
         location: true,
-        requiredSkills: true,
-        experienceMinYears: true,
-        experienceMaxYears: true,
-        numberOfPositions: true,
+        contractType: true,
+        hiringManagerId: true,
+        experienceMin: true,
+        experienceMax: true,
+        postedDate: true,
+        expectedCompletionDate: true,
+        actionDate: true,
         status: true,
-        profilesSubmittedCount: true,
-        createdAt: true,
-        updatedAt: true,
-        profiles: {
+        hiringProfiles: {
+          where: {
+            uploadedBy: context.userId,
+            isDeleted: false,
+          },
           orderBy: { submittedAt: "desc" },
-          take: 10,
           select: {
             id: true,
-            candidateName: true,
-            candidateEmail: true,
-            candidatePhone: true,
-            totalExperience: true,
-            resumeFileName: true,
+            s3Key: true,
             status: true,
             submittedAt: true,
           },
@@ -114,9 +183,33 @@ export const getVendorOpeningById = async (
       return;
     }
 
+    const manager = await prisma.user.findUnique({
+      where: {
+        id: opening.hiringManagerId,
+      },
+      select: {
+        firstName: true,
+        lastName: true,
+        username: true,
+      },
+    });
+
+    const managerFullName = manager
+      ? [manager.firstName, manager.lastName].filter(Boolean).join(" ").trim() ||
+        manager.username ||
+        opening.hiringManagerId
+      : opening.hiringManagerId;
+
     res.status(200).json({
       message: "Opening details fetched successfully",
-      data: opening,
+      data: {
+        ...opening,
+        hiringManagerName: managerFullName,
+        experienceRange: `${opening.experienceMin}-${
+          opening.experienceMax ?? opening.experienceMin
+        } years`,
+        profilesCount: opening.hiringProfiles.length,
+      },
     });
   } catch (error) {
     console.error("[Vendor Openings] Failed to fetch opening details:", error);
@@ -136,10 +229,15 @@ export const createProfileUploadPresign = async (
     }
 
     const openingId = req.params.id;
-    const { fileName } = req.body as { fileName?: string };
+    const body = req.body as { fileName?: string; files?: UploadItem[] };
+    const requestedFiles: UploadItem[] = Array.isArray(body.files)
+      ? body.files
+      : body.fileName
+      ? [{ fileName: body.fileName }]
+      : [];
 
-    if (!fileName) {
-      res.status(400).json({ message: "fileName is required" });
+    if (requestedFiles.length === 0) {
+      res.status(400).json({ message: "fileName or files[] is required" });
       return;
     }
 
@@ -164,27 +262,39 @@ export const createProfileUploadPresign = async (
       return;
     }
 
-    const safeFileName = sanitizeFilename(fileName);
-    const folderPath = getUserFolderPath(
-      "vendor-profiles",
-      context.tenantId,
-      context.department,
-      context.userId
-    );
+    const uploads = await Promise.all(
+      requestedFiles.map(async (file) => {
+        const ext = getFileExtension(file.fileName);
+        if (!isSupportedExtension(ext)) {
+          throw new Error(
+            `Unsupported file type for ${file.fileName}. Only PDF and PPTX are allowed.`
+          );
+        }
 
-    const s3Key = `${folderPath}/${openingId}/${Date.now()}-${safeFileName}`;
-    const uploadUrl = await storageService.getUploadURL(s3Key);
+        const safeFileName = sanitizeFilename(file.fileName);
+        const s3Key = `${context.tenantId}/${openingId}/${Date.now()}_${safeFileName}`;
+        const uploadUrl = await storageService.getUploadURL(s3Key, CONTENT_TYPES[ext]);
+
+        return {
+          uploadUrl,
+          s3Key,
+          fileName: safeFileName,
+          contentType: CONTENT_TYPES[ext],
+          expiresInSeconds: 3600,
+        };
+      })
+    );
 
     res.status(200).json({
       message: "Presigned upload URL generated",
-      data: {
-        uploadUrl,
-        s3Key,
-        fileName: safeFileName,
-        expiresInSeconds: 3600,
-      },
+      data: uploads,
     });
   } catch (error) {
+    if ((error as Error).message.startsWith("Unsupported file type")) {
+      res.status(400).json({ message: (error as Error).message });
+      return;
+    }
+
     console.error("[Vendor Openings] Failed to generate presigned URL:", error);
     res.status(500).json({ message: "Failed to generate presigned URL" });
   }
@@ -202,29 +312,23 @@ export const submitUploadedProfile = async (
     }
 
     const openingId = req.params.id;
-    const {
-      candidateName,
-      candidateEmail,
-      candidatePhone,
-      totalExperience,
-      resumeS3Key,
-      resumeFileName,
-    } = req.body as {
-      candidateName?: string;
-      candidateEmail?: string;
-      candidatePhone?: string;
-      totalExperience?: number;
-      resumeS3Key?: string;
-      resumeFileName?: string;
+    const body = req.body as {
+      uploads?: Array<{ s3Key?: string }>;
+      s3Key?: string;
     };
 
-    if (!candidateName || !candidateEmail || !resumeS3Key || !resumeFileName) {
-      res.status(400).json({
-        message:
-          "candidateName, candidateEmail, resumeS3Key and resumeFileName are required",
-      });
+    const uploads = Array.isArray(body.uploads)
+      ? body.uploads
+      : body.s3Key
+      ? [{ s3Key: body.s3Key }]
+      : [];
+
+    if (uploads.length === 0 || uploads.some((item) => !item.s3Key)) {
+      res.status(400).json({ message: "uploads[] with s3Key is required" });
       return;
     }
+
+    const requiredPrefix = `${context.tenantId}/${openingId}/`;
 
     const transactionResult = await prisma.$transaction(async (tx) => {
       const opening = await tx.opening.findFirst({
@@ -246,44 +350,43 @@ export const submitUploadedProfile = async (
         throw new Error("OPENING_NOT_OPEN");
       }
 
-      const createdProfile = await tx.vendorProfile.create({
-        data: {
-          openingId,
-          tenantId: context.tenantId,
-          submittedById: context.userId,
-          candidateName: candidateName.trim(),
-          candidateEmail: candidateEmail.trim().toLowerCase(),
-          candidatePhone: candidatePhone?.trim(),
-          totalExperience,
-          resumeS3Key,
-          resumeFileName: sanitizeFilename(resumeFileName),
-          status: "SUBMITTED",
-        },
-        select: {
-          id: true,
-          candidateName: true,
-          candidateEmail: true,
-          status: true,
-          submittedAt: true,
-        },
-      });
+      const createdProfiles = [];
 
-      await tx.opening.update({
-        where: {
-          id: openingId,
-        },
-        data: {
-          profilesSubmittedCount: {
-            increment: 1,
+      for (const item of uploads) {
+        const s3Key = item.s3Key as string;
+
+        if (!s3Key.startsWith(requiredPrefix)) {
+          throw new Error("INVALID_S3_KEY_SCOPE");
+        }
+
+        const ext = getFileExtension(s3Key);
+        if (!isSupportedExtension(ext)) {
+          throw new Error("INVALID_S3_KEY_TYPE");
+        }
+
+        const createdProfile = await tx.hiringProfile.create({
+          data: {
+            openingId,
+            s3Key,
+            uploadedBy: context.userId,
+            status: "SUBMITTED",
           },
-        },
-      });
+          select: {
+            id: true,
+            s3Key: true,
+            status: true,
+            submittedAt: true,
+          },
+        });
 
-      return createdProfile;
+        createdProfiles.push(createdProfile);
+      }
+
+      return createdProfiles;
     });
 
     res.status(201).json({
-      message: "Profile submitted successfully",
+      message: "Profiles submitted successfully",
       data: transactionResult,
     });
   } catch (error) {
@@ -299,7 +402,121 @@ export const submitUploadedProfile = async (
       return;
     }
 
+    if ((error as Error).message === "INVALID_S3_KEY_SCOPE") {
+      res.status(400).json({
+        message: "Invalid upload path. Cross-vendor or cross-tenant uploads are not allowed.",
+      });
+      return;
+    }
+
+    if ((error as Error).message === "INVALID_S3_KEY_TYPE") {
+      res.status(400).json({ message: "Only PDF and PPTX uploads are allowed" });
+      return;
+    }
+
     console.error("[Vendor Openings] Failed to submit profile:", error);
     res.status(500).json({ message: "Failed to submit profile" });
+  }
+};
+
+export const softDeleteUploadedProfile = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const context = getTenantContext(req);
+    if (!context) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    const profileId = Number(req.params.profileId);
+    if (Number.isNaN(profileId)) {
+      res.status(400).json({ message: "Invalid profileId" });
+      return;
+    }
+
+    const profile = await prisma.hiringProfile.findFirst({
+      where: {
+        id: profileId,
+        uploadedBy: context.userId,
+        isDeleted: false,
+        opening: {
+          tenantId: context.tenantId,
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!profile) {
+      res.status(404).json({ message: "Profile not found" });
+      return;
+    }
+
+    await prisma.hiringProfile.update({
+      where: {
+        id: profileId,
+      },
+      data: {
+        isDeleted: true,
+      },
+    });
+
+    res.status(200).json({ message: "Profile soft deleted successfully" });
+  } catch (error) {
+    console.error("[Vendor Openings] Failed to soft delete profile:", error);
+    res.status(500).json({ message: "Failed to soft delete profile" });
+  }
+};
+
+export const getUploadedProfilePreviewUrl = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const context = getTenantContext(req);
+    if (!context) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    const profileId = Number(req.params.profileId);
+    if (Number.isNaN(profileId)) {
+      res.status(400).json({ message: "Invalid profileId" });
+      return;
+    }
+
+    const profile = await prisma.hiringProfile.findFirst({
+      where: {
+        id: profileId,
+        uploadedBy: context.userId,
+        isDeleted: false,
+        opening: {
+          tenantId: context.tenantId,
+        },
+      },
+      select: {
+        s3Key: true,
+      },
+    });
+
+    if (!profile) {
+      res.status(404).json({ message: "Profile not found" });
+      return;
+    }
+
+    const previewUrl = await storageService.getObjectURL(profile.s3Key);
+
+    res.status(200).json({
+      message: "Preview URL generated",
+      data: {
+        previewUrl,
+      },
+    });
+  } catch (error) {
+    console.error("[Vendor Openings] Failed to generate preview URL:", error);
+    res.status(500).json({ message: "Failed to generate preview URL" });
   }
 };

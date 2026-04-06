@@ -7,9 +7,10 @@ import {
   RequestHandler,
 } from "express";
 import asyncHandler from "../../../utils/handler/asyncHandler.js";
-import { authenticateUser } from "../../../middlewares/auth/authenticateMiddleware.js";
 import {
+  getTokenDebugInfo,
   logout,
+  refreshAccessToken,
   register,
   verifyLogin,
   verifyTOTP,
@@ -65,9 +66,20 @@ router.post("/verify-login", wrapHandler(verifyLogin));
 router.post("/verify-totp", wrapHandler(verifyTOTP));
 
 /**
- * POST /logout - Logout authenticated user
- * Requires authentication middleware to access user session
+ * POST /refresh-token - Refresh access token using refresh token cookie
  */
-router.post("/logout", authenticateUser, wrapProtectedHandler(logout));
+router.post("/refresh-token", wrapHandler(refreshAccessToken));
+
+/**
+ * GET /debug/token - Temporary token/DB mapping diagnostics endpoint
+ * Requires AUTH_DEBUG_ENDPOINT_ENABLED=true in backend env.
+ */
+router.get("/debug/token", wrapHandler(getTokenDebugInfo));
+
+/**
+ * POST /logout - Logout authenticated user
+ * Clears local session cookies even if access token is expired
+ */
+router.post("/logout", wrapHandler(logout as RequestHandler));
 
 export default router;
