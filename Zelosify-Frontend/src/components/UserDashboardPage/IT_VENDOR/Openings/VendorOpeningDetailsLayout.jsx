@@ -3,10 +3,16 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Loader2, Trash2, Upload } from "lucide-react";
-import axios from "axios";
 import axiosInstance from "@/utils/Axios/AxiosInstance";
 
 const ACCEPTED_FILE_TYPES = [".pdf", ".pptx"];
+
+async function sha256Hex(file) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const bytes = Array.from(new Uint8Array(hashBuffer));
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export default function VendorOpeningDetailsLayout({ openingId }) {
   const [opening, setOpening] = useState(null);
@@ -14,10 +20,10 @@ export default function VendorOpeningDetailsLayout({ openingId }) {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [deleteLoadingId, setDeleteLoadingId] = useState(null);
   const [previewLoadingId, setPreviewLoadingId] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const [error, setError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploadedMeta, setUploadedMeta] = useState([]);
 
   const fileInputRef = useRef(null);
 
@@ -56,51 +62,67 @@ export default function VendorOpeningDetailsLayout({ openingId }) {
       return;
     }
 
+    if (files.length > 10) {
+      setError("Maximum 10 files are allowed per upload");
+      return;
+    }
+
     const invalid = files.find((file) => !isAllowedFileName(file.name));
     if (invalid) {
       setError("Only PDF and PPTX files are allowed");
       return;
     }
 
+    // NEW: duplicate upload prevention using SHA-256 file hash
+    for (const file of files) {
+      const fileHash = await sha256Hex(file);
+      const duplicateResponse = await axiosInstance.post(`/vendor/openings/${openingId}/check-duplicate`, {
+        fileHash,
+      });
+
+      if (duplicateResponse?.data?.data?.isDuplicate) {
+        const submittedAt = duplicateResponse?.data?.data?.existingSubmittedAt;
+        const duplicateWarning = `A resume with this content was already uploaded on ${new Date(
+          submittedAt
+        ).toLocaleString()}. Upload anyway?`;
+
+        if (!window.confirm(duplicateWarning)) {
+          return;
+        }
+      }
+    }
+
     setError("");
     setSelectedFiles(files);
+    setSubmitLoading(true);
+    setUploadProgress(0);
 
     try {
-      const presignResponse = await axiosInstance.post(
-        `/vendor/openings/${openingId}/profiles/presign`,
-        {
-          files: files.map((file) => ({ fileName: file.name })),
-        }
-      );
+      const formData = new FormData();
+      files.forEach((file) => formData.append("profiles", file));
 
-      const presignedFiles = presignResponse?.data?.data || [];
-      if (!Array.isArray(presignedFiles) || presignedFiles.length !== files.length) {
-        throw new Error("Invalid presign response from server");
-      }
+      await axiosInstance.post(`/vendor/openings/${openingId}/profiles/upload`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+        onUploadProgress: (progressEvent) => {
+          const total = progressEvent.total || 0;
+          if (!total) {
+            return;
+          }
+          const percent = Math.round((progressEvent.loaded * 100) / total);
+          setUploadProgress(percent);
+        },
+      });
 
-      const uploaded = [];
-
-      for (let i = 0; i < files.length; i += 1) {
-        const file = files[i];
-        const presigned = presignedFiles[i];
-
-        await axios.put(presigned.uploadUrl, file, {
-          headers: {
-            "Content-Type": presigned.contentType || file.type || "application/pdf",
-          },
-        });
-
-        uploaded.push({
-          s3Key: presigned.s3Key,
-          fileName: presigned.fileName,
-        });
-      }
-
-      setUploadedMeta(uploaded);
+      setSelectedFiles([]);
+      await fetchOpeningDetails();
     } catch (apiError) {
-      setUploadedMeta([]);
       setSelectedFiles([]);
       setError(apiError?.response?.data?.message || apiError.message || "Upload failed");
+    } finally {
+      setSubmitLoading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -117,32 +139,6 @@ export default function VendorOpeningDetailsLayout({ openingId }) {
 
     const files = Array.from(event.dataTransfer.files || []);
     await uploadSelectedFiles(files);
-  };
-
-  const handleSubmitProfiles = async (event) => {
-    event.preventDefault();
-
-    if (uploadedMeta.length === 0) {
-      setError("Upload at least one profile first");
-      return;
-    }
-
-    setSubmitLoading(true);
-    setError("");
-
-    try {
-      await axiosInstance.post(`/vendor/openings/${openingId}/profiles/upload`, {
-        uploads: uploadedMeta.map((item) => ({ s3Key: item.s3Key })),
-      });
-
-      setSelectedFiles([]);
-      setUploadedMeta([]);
-      await fetchOpeningDetails();
-    } catch (apiError) {
-      setError(apiError?.response?.data?.message || "Failed to submit profiles");
-    } finally {
-      setSubmitLoading(false);
-    }
   };
 
   const handleSoftDelete = async (profileId) => {
@@ -164,7 +160,7 @@ export default function VendorOpeningDetailsLayout({ openingId }) {
     setPreviewLoadingId(profileId);
 
     try {
-      const response = await axiosInstance.get(`/vendor/openings/profiles/${profileId}/preview`);
+      const response = await axiosInstance.get(`/vendor/openings/${openingId}/profiles/${profileId}/view`);
       const previewUrl = response?.data?.data?.previewUrl;
       if (!previewUrl) {
         throw new Error("Preview URL not found");
@@ -265,27 +261,11 @@ export default function VendorOpeningDetailsLayout({ openingId }) {
           <p className="mt-3 text-xs text-secondary">Selected: {selectedFiles.length} file(s)</p>
         )}
 
-        {uploadedMeta.length > 0 && (
-          <p className="mt-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
-            {uploadedMeta.length} file(s) uploaded to S3 and ready to submit.
+        {submitLoading && (
+          <p className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            Uploading via backend: {uploadProgress}%
           </p>
         )}
-
-        <form onSubmit={handleSubmitProfiles}>
-          <button
-            type="submit"
-            disabled={!canUpload || uploadedMeta.length === 0}
-            className="mt-3 inline-flex items-center rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-60"
-          >
-            {submitLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting
-              </>
-            ) : (
-              "Submit Profiles"
-            )}
-          </button>
-        </form>
       </section>
 
       <section className="rounded-lg border border-border bg-white p-4 dark:bg-[#111827]">

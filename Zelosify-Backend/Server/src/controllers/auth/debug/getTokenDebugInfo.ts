@@ -76,9 +76,19 @@ export const getTokenDebugInfo = async (
     }
 
     const subject = payload?.sub || null;
+    const tenantId = (req as any).user?.tenant?.tenantId || null;
+
+    if (!tenantId) {
+      res.status(401).json({ message: "Tenant context missing" });
+      return;
+    }
+
     const matchedUser = subject
-      ? await prisma.user.findUnique({
-          where: { externalId: subject },
+      ? await prisma.user.findFirst({
+          where: {
+            externalId: subject,
+            tenantId,
+          },
           select: {
             id: true,
             username: true,

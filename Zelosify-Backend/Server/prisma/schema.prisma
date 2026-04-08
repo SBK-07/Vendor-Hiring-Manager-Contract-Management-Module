@@ -72,6 +72,7 @@ model hiringProfile {
   id              Int            @id @default(autoincrement())
   openingId       String
   s3Key           String         @unique
+  fileHash        String?
   uploadedBy      String
   status          ProfileStatus  @default(SUBMITTED)
   shortlistedBy   String?
@@ -81,17 +82,52 @@ model hiringProfile {
   recommended     Boolean?
   recommendationScore Float?
   recommendationReason String?
+  recommendationBreakdown Json?
   recommendationLatencyMs Int?
+  processingTimeMs Int?
   recommendationVersion String?
   recommendationConfidence Float?
+  matchedSkills   String[]       @default([])
+  missingSkills   String[]       @default([])
+  llmStartedAt    DateTime?
+  llmCompletedAt  DateTime?
+  tokenUsage      Json?
+  errorMessage    String?
+  retryCount      Int            @default(0)
   recommendedAt   DateTime?
   isDeleted       Boolean        @default(false)
   submittedAt     DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  recommendationExecutions recommendationExecutionMetadata[]
 
   opening         Opening        @relation(fields: [openingId], references: [id], onDelete: Cascade)
 
   @@index([openingId])
   @@index([recommended])
+  @@index([openingId, fileHash])
+}
+
+model recommendationExecutionMetadata {
+  id               Int       @id @default(autoincrement())
+  profileId        Int
+  startedAt        DateTime
+  completedAt      DateTime?
+  totalLatencyMs   Int?
+  p95LatencyMs     Int?
+  maxProcessingMs  Int?
+  overSla          Boolean?
+  status           String
+  model            String?
+  retries          Int?
+  tokenUsage       Json?
+  toolInvocations  Json?
+  errorMessage     String?
+  createdAt        DateTime  @default(now())
+
+  profile          hiringProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([createdAt])
 }
 
 enum AuthProvider {
@@ -120,6 +156,10 @@ enum OpeningStatus {
 
 enum ProfileStatus {
   SUBMITTED
+  PROCESSING
+  COMPLETED
+  FAILED
+  REVIEW_NEEDED
   SHORTLISTED
   REJECTED
 }

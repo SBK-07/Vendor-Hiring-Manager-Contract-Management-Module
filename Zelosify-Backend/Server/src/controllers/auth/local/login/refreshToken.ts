@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import axios from "axios";
+import jwt from "jsonwebtoken";
+import prisma from "../../../../config/prisma/prisma.js";
 import { getKeycloakClientSecret } from "../../../../utils/keycloak/getKeycloakClientSecret.js";
 
 export const refreshAccessToken = async (
@@ -45,7 +47,33 @@ export const refreshAccessToken = async (
       });
     }
 
-    res.status(200).json({ message: "Token refreshed" });
+    const decoded = jwt.decode(tokenResponse.data.access_token) as jwt.JwtPayload | null;
+    const externalId = decoded?.sub || null;
+
+    let authContext: { userId: string; tenantId: string } | null = null;
+    if (externalId) {
+      const matchedUser = await prisma.user.findFirst({
+        where: { externalId: String(externalId) },
+        select: {
+          id: true,
+          tenantId: true,
+        },
+      });
+
+      if (matchedUser?.tenantId) {
+        authContext = {
+          userId: matchedUser.id,
+          tenantId: matchedUser.tenantId,
+        };
+      }
+    }
+
+    res.status(200).json({
+      message: "Token refreshed",
+      accessToken: tokenResponse.data.access_token,
+      refreshToken: tokenResponse.data.refresh_token || null,
+      authContext,
+    });
   } catch (error: any) {
     console.error("Token refresh failed:", error.response?.data || error.message);
     res.status(401).json({ message: "Failed to refresh token" });

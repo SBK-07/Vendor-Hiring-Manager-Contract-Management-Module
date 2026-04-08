@@ -19,6 +19,7 @@ import authRoutes from "./routers/auth/authRoute.js";
 import awsRouter from "./routers/aws/awsRoute.js";
 import vendorRoutes from "./routers/vendor/vendorRoutes.js";
 import hiringManagerRoutes from "./routers/hiring/hiringManagerRoutes.js";
+import publicRoute from "./routers/public/publicRoute.js";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -73,6 +74,10 @@ async function startServer() {
     // User authentication and authorization
     app.use("/api/v1/auth", authRoutes);
 
+    // Public endpoints used by unauthenticated pages
+    app.use("/api/public", publicRoute);
+    app.use("/api/v1/public", publicRoute);
+
     // AWS integration
     app.use("/api/v1/aws", awsRouter);
 
@@ -82,6 +87,7 @@ async function startServer() {
 
     // Hiring manager routes
     app.use("/api/v1/hiring-manager", hiringManagerRoutes);
+    app.use("/api/hiring-manager", hiringManagerRoutes);
 
     // Request debugging middleware - logs all incoming requests
     app.use((req, _, next) => {

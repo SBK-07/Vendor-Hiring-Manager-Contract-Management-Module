@@ -1,5 +1,10 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import axiosInstance from "@/utils/Axios/AxiosInstance";
+import axiosInstance, {
+  setAccessToken,
+  setRefreshToken,
+  setAuthContext,
+  clearStoredAuthTokens,
+} from "@/utils/Axios/AxiosInstance";
 import { clearAuthData } from "@/utils/Auth/authUtils";
 
 // Helper functions for localStorage
@@ -91,12 +96,24 @@ export const checkAuthStatus = createAsyncThunk(
 // Async thunk for login with credentials
 export const loginWithCredentials = createAsyncThunk(
   "auth/loginWithCredentials",
-  async ({ usernameOrEmail, password }, { rejectWithValue }) => {
+  async ({ usernameOrEmail, password, tenantName }, { rejectWithValue }) => {
     try {
       const response = await axiosInstance.post("/auth/verify-login", {
         usernameOrEmail,
         password,
+        tenantName,
       });
+
+      if (response.data?.accessToken) {
+        setAccessToken(response.data.accessToken);
+      }
+      if ("refreshToken" in (response.data || {})) {
+        setRefreshToken(response.data.refreshToken);
+      }
+      if (response.data?.authContext) {
+        setAuthContext(response.data.authContext);
+      }
+
       return response.data;
     } catch (error) {
       return rejectWithValue(
@@ -114,6 +131,17 @@ export const verifyTOTP = createAsyncThunk(
       const response = await axiosInstance.post("/auth/verify-totp", {
         totp,
       });
+
+      if (response.data?.accessToken) {
+        setAccessToken(response.data.accessToken);
+      }
+      if ("refreshToken" in (response.data || {})) {
+        setRefreshToken(response.data.refreshToken);
+      }
+      if (response.data?.authContext) {
+        setAuthContext(response.data.authContext);
+      }
+
       // Save the user data to localStorage after successful TOTP verification
       if (response.data && response.data.user) {
         saveUserToStorage(response.data.user);
@@ -153,6 +181,7 @@ const authSlice = createSlice({
       state.user = null;
       // Clear all auth data (cookies and localStorage)
       clearAuthData();
+      clearStoredAuthTokens();
       saveUserToStorage(null);
     },
     openSignoutConfirmation: (state) => {

@@ -2,11 +2,14 @@ import { motion } from "framer-motion";
 import { Eye, EyeOff } from "lucide-react";
 
 export default function LoginForm({
+  formData,
   handleChange,
   handleSubmit,
   loginStage,
   isLoading,
   error,
+  tenantOptions,
+  tenantsLoading,
   showPassword,
   setShowPassword,
   setLoginStage,
@@ -15,6 +18,35 @@ export default function LoginForm({
     <form onSubmit={handleSubmit} className="space-y-4">
       {loginStage === "credentials" ? (
         <>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+              Company Name
+            </label>
+            <input
+              name="tenantName"
+              value={formData.tenantName}
+              onChange={handleChange}
+              required
+              list="tenant-name-options"
+              placeholder={tenantsLoading ? "Loading companies..." : "Enter your company name"}
+              aria-label="Company Name"
+              aria-invalid={error.tenantName ? "true" : "false"}
+              className={`w-full px-3 py-2 border ${
+                error.tenantName
+                  ? "border-red-500"
+                  : "border-gray-300 dark:border-gray-700"
+              } rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent dark:bg-gray-900 dark:text-white transition-colors duration-200`}
+            />
+            <datalist id="tenant-name-options">
+              {tenantOptions.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+            {error.tenantName && (
+              <p className="mt-1 text-sm text-red-600">{error.tenantName}</p>
+            )}
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
               Username or Email

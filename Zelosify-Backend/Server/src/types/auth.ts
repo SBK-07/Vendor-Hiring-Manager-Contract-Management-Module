@@ -106,4 +106,13 @@ export interface LoginSuccessResponse {
   };
   /** Redirect URL after login */
   redirectTo: string;
+  /** Access token for API requests */
+  accessToken?: string;
+  /** Refresh token for renewal */
+  refreshToken?: string | null;
+  /** Token-backed auth context */
+  authContext?: {
+    userId: string;
+    tenantId: string;
+  };
 }

@@ -1,8 +1,9 @@
 import { Router, type RequestHandler } from "express";
 import { authenticateUser } from "../../middlewares/auth/authenticateMiddleware.js";
 import { authorizeRole } from "../../middlewares/auth/authorizeMiddleware.js";
+import { vendorProfileUploadConfig } from "../../config/multer/multerConfig.js";
 import {
-  createProfileUploadPresign,
+  checkDuplicateProfileUpload,
   getUploadedProfilePreviewUrl,
   getVendorOpeningById,
   getVendorOpenings,
@@ -27,16 +28,17 @@ router.get(
 );
 
 router.post(
-  "/:id/profiles/presign",
+  "/:id/check-duplicate",
   authenticateUser as RequestHandler,
   authorizeRole("IT_VENDOR") as RequestHandler,
-  createProfileUploadPresign as RequestHandler
+  checkDuplicateProfileUpload as RequestHandler
 );
 
 router.post(
   "/:id/profiles/upload",
   authenticateUser as RequestHandler,
   authorizeRole("IT_VENDOR") as RequestHandler,
+  vendorProfileUploadConfig.array("profiles", 10) as RequestHandler,
   submitUploadedProfile as RequestHandler
 );
 
@@ -48,7 +50,7 @@ router.patch(
 );
 
 router.get(
-  "/profiles/:profileId/preview",
+  "/:id/profiles/:profileId/view",
   authenticateUser as RequestHandler,
   authorizeRole("IT_VENDOR") as RequestHandler,
   getUploadedProfilePreviewUrl as RequestHandler

@@ -14,21 +14,50 @@ import { generateTempToken } from "../../../../utils/jwt/generateTempToken.js";
  * @param res - Express response with login status
  */
 export const verifyLogin = async (
-  req: Request<{}, any, { usernameOrEmail: string; password: string }>,
+  req: Request<{}, any, { usernameOrEmail: string; password: string; tenantName?: string }>,
   res: Response
 ): Promise<void> => {
   try {
-    const { usernameOrEmail, password } = req.body;
+    const { usernameOrEmail, password, tenantName } = req.body;
 
-    if (!usernameOrEmail || !password) {
+    if (!usernameOrEmail || !password || !tenantName) {
       res
         .status(400)
-        .json({ message: "Username/Email and password are required" });
+        .json({ message: "usernameOrEmail, password, and tenantName are required" });
       return;
     }
 
+    const normalizedTenantName = tenantName.trim();
+
+    const tenantMatches = await prisma.tenants.findMany({
+      where: {
+        companyName: {
+          equals: normalizedTenantName,
+          mode: "insensitive",
+        },
+      },
+      select: {
+        tenantId: true,
+        companyName: true,
+      },
+      take: 2,
+    });
+
+    if (tenantMatches.length === 0) {
+      res.status(400).json({ message: "Invalid company name" });
+      return;
+    }
+
+    if (tenantMatches.length > 1) {
+      res.status(400).json({ message: "Ambiguous company name" });
+      return;
+    }
+
+    const resolvedTenantId = tenantMatches[0].tenantId;
+
     const user = await prisma.user.findFirst({
       where: {
+        tenantId: resolvedTenantId,
         OR: [{ email: usernameOrEmail }, { username: usernameOrEmail }],
       },
       select: {
@@ -85,8 +114,11 @@ export const verifyLogin = async (
         const { access_token, refresh_token } = tokenResponse.data;
 
         // Update user's tokens in the database
-        await prisma.user.update({
-          where: { id: user.id },
+        await prisma.user.updateMany({
+          where: {
+            id: user.id,
+            tenantId: resolvedTenantId,
+          },
           data: {
             accessToken: access_token,
             refreshToken: refresh_token,
@@ -128,6 +160,12 @@ export const verifyLogin = async (
             tenantId: user.tenantId,
           },
           redirectTo: "/user", // Redirect to user page
+          accessToken: access_token,
+          refreshToken: refresh_token,
+          authContext: {
+            userId: user.id,
+            tenantId: resolvedTenantId,
+          },
         };
 
         res.json(successResponse);
@@ -139,7 +177,7 @@ export const verifyLogin = async (
       const refreshToken = tokenResponse.data.refresh_token;
 
       // Generate a temporary token that includes the refresh token
-      const tempToken = generateTempToken(user.id, refreshToken);
+      const tempToken = generateTempToken(user.id, refreshToken, user.tenantId);
 
       // Store tempToken in cookies
       res.cookie("temp_token", tempToken, {

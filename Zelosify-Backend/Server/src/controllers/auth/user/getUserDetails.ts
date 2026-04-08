@@ -10,8 +10,17 @@ export const getUserDetails = async (
     const userId = req.user?.id;
 
     // Fetch the user's details from the database using Prisma
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
+    const tenantId = req.user?.tenant?.tenantId;
+    if (!userId || !tenantId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        tenantId,
+      },
       select: {
         id: true,
         username: true,

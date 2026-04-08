@@ -5,6 +5,49 @@ let authRedirectInProgress = false;
 let isRefreshing = false;
 let failedQueue = [];
 
+const ACCESS_TOKEN_KEY = "accessToken";
+const REFRESH_TOKEN_KEY = "refreshToken";
+const AUTH_CONTEXT_KEY = "authContext";
+
+const getAccessToken = () => {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
+};
+
+const setAccessToken = (token) => {
+  if (typeof window === "undefined") return;
+  if (token) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+  }
+};
+
+const setRefreshToken = (token) => {
+  if (typeof window === "undefined") return;
+  if (token) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+  }
+};
+
+const setAuthContext = (context) => {
+  if (typeof window === "undefined") return;
+  if (context?.userId && context?.tenantId) {
+    localStorage.setItem(AUTH_CONTEXT_KEY, JSON.stringify(context));
+  } else {
+    localStorage.removeItem(AUTH_CONTEXT_KEY);
+  }
+};
+
+const clearStoredAuthTokens = () => {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_CONTEXT_KEY);
+};
+
 const processQueue = (error) => {
   failedQueue.forEach((pending) => {
     if (error) {
@@ -26,9 +69,20 @@ const axiosInstance = axios.create({
   withCredentials: true,
 });
 
+const refreshClient = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_BACKEND_URL,
+  withCredentials: true,
+});
+
 // Add request interceptor for logging
 axiosInstance.interceptors.request.use(
   (config) => {
+    const accessToken = getAccessToken();
+    if (accessToken) {
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${accessToken}`;
+    }
+
     // console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
     return config;
   },
@@ -80,7 +134,19 @@ axiosInstance.interceptors.response.use(
           isRefreshing = true;
 
           try {
-            await axiosInstance.post("/auth/refresh-token");
+            const refreshResponse = await refreshClient.post("/auth/refresh-token");
+            const newAccessToken = refreshResponse.data?.accessToken || null;
+
+            if (!newAccessToken) {
+              throw new Error("Missing access token in refresh response");
+            }
+
+            setAccessToken(newAccessToken);
+            setRefreshToken(refreshResponse.data?.refreshToken || null);
+            setAuthContext(refreshResponse.data?.authContext || null);
+
+            originalRequest.headers = originalRequest.headers || {};
+            originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
 
             if (typeof window !== "undefined") {
               try {
@@ -102,6 +168,7 @@ axiosInstance.interceptors.response.use(
             if (typeof window !== "undefined") {
               try {
                 localStorage.removeItem("zelosify_user");
+                clearStoredAuthTokens();
               } catch {
                 // Ignore storage failures.
               }
@@ -147,6 +214,7 @@ axiosInstance.interceptors.response.use(
 
           try {
             localStorage.removeItem("zelosify_user");
+            clearStoredAuthTokens();
           } catch {
             // Ignore storage failures.
           }
@@ -167,3 +235,4 @@ axiosInstance.interceptors.response.use(
 );
 
 export default axiosInstance;
+export { setAccessToken, setRefreshToken, setAuthContext, clearStoredAuthTokens };

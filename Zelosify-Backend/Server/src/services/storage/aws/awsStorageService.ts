@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
@@ -12,6 +13,58 @@ import * as dotenv from "dotenv";
 import { StorageService } from "../storageService.js";
 
 dotenv.config();
+
+type S3BodyLike = unknown;
+
+function isNodeReadableStream(value: unknown): value is Readable {
+  return value instanceof Readable;
+}
+
+function isWebReadableStream(value: unknown): value is ReadableStream<any> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ReadableStream<any>).getReader === "function"
+  );
+}
+
+function isUint8ArrayLike(value: unknown): value is Uint8Array {
+  return value instanceof Uint8Array;
+}
+
+function toNodeReadable(body: S3BodyLike): Readable {
+  if (isNodeReadableStream(body)) {
+    return body;
+  }
+
+  if (isWebReadableStream(body)) {
+    const webStream = body;
+    const iterator = (async function* () {
+      const reader = webStream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            return;
+          }
+          if (value !== undefined) {
+            yield value;
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    })();
+
+    return Readable.from(iterator);
+  }
+
+  if (Buffer.isBuffer(body) || isUint8ArrayLike(body)) {
+    return Readable.from([body]);
+  }
+
+  throw new Error("Unsupported S3 Body type returned by AWS SDK");
+}
 
 export class AwsStorageService extends StorageService {
   private s3Client: S3Client;
@@ -51,14 +104,14 @@ export class AwsStorageService extends StorageService {
     });
   }
 
-  async getObjectURL(key: string): Promise<string> {
+  async getObjectURL(key: string, expiresInSeconds = 3600): Promise<string> {
     try {
       const command = new GetObjectCommand({
         Bucket: this.bucket,
         Key: key,
       });
       return await getSignedUrl(this.s3Client, command, {
-        expiresIn: 3600,
+        expiresIn: expiresInSeconds,
         signableHeaders: new Set(["host"]),
       });
     } catch (error) {
@@ -85,14 +138,7 @@ export class AwsStorageService extends StorageService {
         throw new Error("No body returned from S3 object");
       }
 
-      // AWS SDK v3 returns a ReadableStream, convert to Node.js Readable if needed
-      const body = response.Body;
-      if (body instanceof Readable) {
-        return body;
-      } else {
-        // Handle other stream types (like ReadableStream from web streams)
-        return Readable.fromWeb(body as any);
-      }
+      return toNodeReadable(response.Body);
     } catch (error) {
       console.error("[AWS S3] Error getting object stream:", error);
       throw error;
@@ -115,6 +161,20 @@ export class AwsStorageService extends StorageService {
       return { message: "File uploaded successfully" };
     } catch (error) {
       console.error("[AWS S3] Error uploading file:", error);
+      throw error;
+    }
+  }
+
+  async deleteObject(key: string): Promise<{ message: string }> {
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+      await this.s3Client.send(command);
+      return { message: "File deleted successfully" };
+    } catch (error) {
+      console.error("[AWS S3] Error deleting file:", error);
       throw error;
     }
   }

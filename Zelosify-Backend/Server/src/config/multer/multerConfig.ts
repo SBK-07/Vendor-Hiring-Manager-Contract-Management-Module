@@ -57,6 +57,28 @@ export const uploadConfig = multer({
   fileFilter,
 });
 
+const VENDOR_ALLOWED_MIME_TYPES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+] as const;
+
+const vendorProfileFileFilter: multer.Options["fileFilter"] = (req, file, cb) => {
+  if (VENDOR_ALLOWED_MIME_TYPES.includes(file.mimetype as any)) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only PDF and PPTX files are allowed."));
+  }
+};
+
+export const vendorProfileUploadConfig = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: FILE_SIZE_LIMIT,
+    files: 10,
+  },
+  fileFilter: vendorProfileFileFilter,
+});
+
 /**
  * Export individual components for custom configurations
  */

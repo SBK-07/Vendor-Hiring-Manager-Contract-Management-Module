@@ -1,8 +1,12 @@
 import type { Response } from "express";
+import { createHash } from "crypto";
+import { Prisma } from "@prisma/client";
 import { createStorageService } from "../../../services/storage/storageFactory.js";
 import prisma from "../../../config/prisma/prisma.js";
 import { sanitizeFilename } from "../../../helpers/vendorRequestValidation.js";
 import type { AuthenticatedRequest } from "../../../types/typeIndex.js";
+import { triggerRecommendationsForProfiles } from "../../../services/hiring/recommendation/recommendationService.js";
+import { logStructured } from "../../../services/hiring/recommendation/utils/structuredLogger.js";
 
 const storageService = createStorageService();
 
@@ -12,9 +16,7 @@ const CONTENT_TYPES: Record<(typeof SUPPORTED_EXTENSIONS)[number], string> = {
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
-type UploadItem = {
-  fileName: string;
-};
+type MulterFile = Express.Multer.File;
 
 function getTenantContext(req: AuthenticatedRequest) {
   const tenantId = req.user?.tenant?.tenantId;
@@ -89,6 +91,7 @@ export const getVendorOpenings = async (
         id: {
           in: managerIds,
         },
+        tenantId: context.tenantId,
       },
       select: {
         id: true,
@@ -128,7 +131,11 @@ export const getVendorOpenings = async (
       },
     });
   } catch (error) {
-    console.error("[Vendor Openings] Failed to fetch openings:", error);
+    logStructured("vendor_fetch_openings_failed", {
+      tenantId: req.user?.tenant?.tenantId,
+      userId: req.user?.id,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
     res.status(500).json({ message: "Failed to fetch openings" });
   }
 };
@@ -183,9 +190,10 @@ export const getVendorOpeningById = async (
       return;
     }
 
-    const manager = await prisma.user.findUnique({
+    const manager = await prisma.user.findFirst({
       where: {
         id: opening.hiringManagerId,
+        tenantId: context.tenantId,
       },
       select: {
         firstName: true,
@@ -212,15 +220,21 @@ export const getVendorOpeningById = async (
       },
     });
   } catch (error) {
-    console.error("[Vendor Openings] Failed to fetch opening details:", error);
+    logStructured("vendor_fetch_opening_details_failed", {
+      openingId: req.params.id,
+      tenantId: req.user?.tenant?.tenantId,
+      userId: req.user?.id,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
     res.status(500).json({ message: "Failed to fetch opening details" });
   }
 };
 
-export const createProfileUploadPresign = async (
+export const submitUploadedProfile = async (
   req: AuthenticatedRequest,
   res: Response
 ): Promise<void> => {
+  const uploadedS3Keys: string[] = [];
   try {
     const context = getTenantContext(req);
     if (!context) {
@@ -229,15 +243,15 @@ export const createProfileUploadPresign = async (
     }
 
     const openingId = req.params.id;
-    const body = req.body as { fileName?: string; files?: UploadItem[] };
-    const requestedFiles: UploadItem[] = Array.isArray(body.files)
-      ? body.files
-      : body.fileName
-      ? [{ fileName: body.fileName }]
-      : [];
+    const files = ((req as AuthenticatedRequest & { files?: MulterFile[] }).files || []) as MulterFile[];
 
-    if (requestedFiles.length === 0) {
-      res.status(400).json({ message: "fileName or files[] is required" });
+    if (!files.length) {
+      res.status(400).json({ message: "At least one file is required under field 'profiles'" });
+      return;
+    }
+
+    if (files.length > 10) {
+      res.status(400).json({ message: "Maximum 10 files are allowed per upload" });
       return;
     }
 
@@ -258,155 +272,112 @@ export const createProfileUploadPresign = async (
     }
 
     if (opening.status !== "OPEN") {
-      res.status(400).json({ message: "Profiles cannot be uploaded for non-open openings" });
-      return;
-    }
-
-    const uploads = await Promise.all(
-      requestedFiles.map(async (file) => {
-        const ext = getFileExtension(file.fileName);
-        if (!isSupportedExtension(ext)) {
-          throw new Error(
-            `Unsupported file type for ${file.fileName}. Only PDF and PPTX are allowed.`
-          );
-        }
-
-        const safeFileName = sanitizeFilename(file.fileName);
-        const s3Key = `${context.tenantId}/${openingId}/${Date.now()}_${safeFileName}`;
-        const uploadUrl = await storageService.getUploadURL(s3Key, CONTENT_TYPES[ext]);
-
-        return {
-          uploadUrl,
-          s3Key,
-          fileName: safeFileName,
-          contentType: CONTENT_TYPES[ext],
-          expiresInSeconds: 3600,
-        };
-      })
-    );
-
-    res.status(200).json({
-      message: "Presigned upload URL generated",
-      data: uploads,
-    });
-  } catch (error) {
-    if ((error as Error).message.startsWith("Unsupported file type")) {
-      res.status(400).json({ message: (error as Error).message });
-      return;
-    }
-
-    console.error("[Vendor Openings] Failed to generate presigned URL:", error);
-    res.status(500).json({ message: "Failed to generate presigned URL" });
-  }
-};
-
-export const submitUploadedProfile = async (
-  req: AuthenticatedRequest,
-  res: Response
-): Promise<void> => {
-  try {
-    const context = getTenantContext(req);
-    if (!context) {
-      res.status(401).json({ message: "Unauthorized" });
-      return;
-    }
-
-    const openingId = req.params.id;
-    const body = req.body as {
-      uploads?: Array<{ s3Key?: string }>;
-      s3Key?: string;
-    };
-
-    const uploads = Array.isArray(body.uploads)
-      ? body.uploads
-      : body.s3Key
-      ? [{ s3Key: body.s3Key }]
-      : [];
-
-    if (uploads.length === 0 || uploads.some((item) => !item.s3Key)) {
-      res.status(400).json({ message: "uploads[] with s3Key is required" });
-      return;
-    }
-
-    const requiredPrefix = `${context.tenantId}/${openingId}/`;
-
-    const transactionResult = await prisma.$transaction(async (tx) => {
-      const opening = await tx.opening.findFirst({
-        where: {
-          id: openingId,
-          tenantId: context.tenantId,
-        },
-        select: {
-          id: true,
-          status: true,
-        },
-      });
-
-      if (!opening) {
-        throw new Error("OPENING_NOT_FOUND");
-      }
-
-      if (opening.status !== "OPEN") {
-        throw new Error("OPENING_NOT_OPEN");
-      }
-
-      const createdProfiles = [];
-
-      for (const item of uploads) {
-        const s3Key = item.s3Key as string;
-
-        if (!s3Key.startsWith(requiredPrefix)) {
-          throw new Error("INVALID_S3_KEY_SCOPE");
-        }
-
-        const ext = getFileExtension(s3Key);
-        if (!isSupportedExtension(ext)) {
-          throw new Error("INVALID_S3_KEY_TYPE");
-        }
-
-        const createdProfile = await tx.hiringProfile.create({
-          data: {
-            openingId,
-            s3Key,
-            uploadedBy: context.userId,
-            status: "SUBMITTED",
-          },
-          select: {
-            id: true,
-            s3Key: true,
-            status: true,
-            submittedAt: true,
-          },
-        });
-
-        createdProfiles.push(createdProfile);
-      }
-
-      return createdProfiles;
-    });
-
-    res.status(201).json({
-      message: "Profiles submitted successfully",
-      data: transactionResult,
-    });
-  } catch (error) {
-    if ((error as Error).message === "OPENING_NOT_FOUND") {
-      res.status(404).json({ message: "Opening not found" });
-      return;
-    }
-
-    if ((error as Error).message === "OPENING_NOT_OPEN") {
       res
         .status(400)
         .json({ message: "Profiles cannot be submitted for non-open openings" });
       return;
     }
 
-    if ((error as Error).message === "INVALID_S3_KEY_SCOPE") {
-      res.status(400).json({
-        message: "Invalid upload path. Cross-vendor or cross-tenant uploads are not allowed.",
+    const uploadedFiles: Array<{ s3Key: string; fileHash: string }> = [];
+    for (const [index, file] of files.entries()) {
+      const ext = getFileExtension(file.originalname);
+      if (!isSupportedExtension(ext)) {
+        throw new Error("INVALID_S3_KEY_TYPE");
+      }
+
+      const safeFileName = sanitizeFilename(file.originalname);
+      const s3Key = `${context.tenantId}/${openingId}/${Date.now()}_${index}_${safeFileName}`;
+      const contentType = CONTENT_TYPES[ext];
+
+      await storageService.putObject(s3Key, file.buffer, contentType);
+      uploadedS3Keys.push(s3Key);
+
+      uploadedFiles.push({
+        s3Key,
+        fileHash: createHash("sha256").update(file.buffer).digest("hex"),
       });
-      return;
+    }
+
+    let transactionResult;
+    try {
+      transactionResult = await prisma.$transaction(async (tx) => {
+        const createdProfiles = [];
+
+        for (const item of uploadedFiles) {
+          const createdProfile = await tx.hiringProfile.create({
+            data: {
+              openingId,
+              s3Key: item.s3Key,
+              fileHash: item.fileHash,
+              uploadedBy: context.userId,
+              // FIXED: bug 3 stale score carry-over prevention on re-upload
+              status: "SUBMITTED",
+              recommended: null,
+              recommendationScore: null,
+              recommendationConfidence: null,
+              recommendationReason: null,
+              recommendationBreakdown: Prisma.JsonNull,
+              matchedSkills: [],
+              missingSkills: [],
+              recommendationLatencyMs: null,
+              processingTimeMs: null,
+              tokenUsage: Prisma.JsonNull,
+              llmStartedAt: null,
+              llmCompletedAt: null,
+              errorMessage: null,
+            },
+            select: {
+              id: true,
+              s3Key: true,
+              fileHash: true,
+              status: true,
+              submittedAt: true,
+            },
+          });
+
+          createdProfiles.push(createdProfile);
+        }
+
+        return createdProfiles;
+      });
+    } catch (transactionError) {
+      if (uploadedS3Keys.length > 0) {
+        const cleanupResults = await Promise.allSettled(
+          uploadedS3Keys.map((key) => storageService.deleteObject(key))
+        );
+
+        const failedCleanupCount = cleanupResults.filter(
+          (result) => result.status === "rejected"
+        ).length;
+
+        if (failedCleanupCount > 0) {
+          logStructured("vendor_submit_profiles_compensation_cleanup_failed", {
+            openingId,
+            tenantId: context.tenantId,
+            userId: context.userId,
+            failedCleanupCount,
+            uploadedKeyCount: uploadedS3Keys.length,
+          });
+        }
+      }
+
+      throw transactionError;
+    }
+
+    res.status(201).json({
+      success: true,
+      count: transactionResult.length,
+      profiles: transactionResult,
+    });
+
+    const submittedIds = transactionResult.map((item) => item.id);
+    if (submittedIds.length > 0) {
+      triggerRecommendationsForProfiles(submittedIds, context.tenantId);
+    }
+  } catch (error) {
+    if (uploadedS3Keys.length > 0) {
+      await Promise.allSettled(uploadedS3Keys.map((key) => storageService.deleteObject(key)));
+      uploadedS3Keys.length = 0;
     }
 
     if ((error as Error).message === "INVALID_S3_KEY_TYPE") {
@@ -414,7 +385,12 @@ export const submitUploadedProfile = async (
       return;
     }
 
-    console.error("[Vendor Openings] Failed to submit profile:", error);
+    logStructured("vendor_submit_profiles_failed", {
+      openingId: req.params.id,
+      tenantId: req.user?.tenant?.tenantId,
+      userId: req.user?.id,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
     res.status(500).json({ message: "Failed to submit profile" });
   }
 };
@@ -455,18 +431,33 @@ export const softDeleteUploadedProfile = async (
       return;
     }
 
-    await prisma.hiringProfile.update({
+    const softDeleteResult = await prisma.hiringProfile.updateMany({
       where: {
         id: profileId,
+        uploadedBy: context.userId,
+        isDeleted: false,
+        opening: {
+          tenantId: context.tenantId,
+        },
       },
       data: {
         isDeleted: true,
       },
     });
 
+    if (softDeleteResult.count === 0) {
+      res.status(404).json({ message: "Profile not found" });
+      return;
+    }
+
     res.status(200).json({ message: "Profile soft deleted successfully" });
   } catch (error) {
-    console.error("[Vendor Openings] Failed to soft delete profile:", error);
+    logStructured("vendor_soft_delete_profile_failed", {
+      profileId: req.params.profileId,
+      tenantId: req.user?.tenant?.tenantId,
+      userId: req.user?.id,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
     res.status(500).json({ message: "Failed to soft delete profile" });
   }
 };
@@ -491,6 +482,7 @@ export const getUploadedProfilePreviewUrl = async (
     const profile = await prisma.hiringProfile.findFirst({
       where: {
         id: profileId,
+        openingId: req.params.id,
         uploadedBy: context.userId,
         isDeleted: false,
         opening: {
@@ -507,7 +499,7 @@ export const getUploadedProfilePreviewUrl = async (
       return;
     }
 
-    const previewUrl = await storageService.getObjectURL(profile.s3Key);
+    const previewUrl = await storageService.getObjectURL(profile.s3Key, 60);
 
     res.status(200).json({
       message: "Preview URL generated",
@@ -516,7 +508,63 @@ export const getUploadedProfilePreviewUrl = async (
       },
     });
   } catch (error) {
-    console.error("[Vendor Openings] Failed to generate preview URL:", error);
+    logStructured("vendor_preview_url_failed", {
+      profileId: req.params.profileId,
+      tenantId: req.user?.tenant?.tenantId,
+      userId: req.user?.id,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
     res.status(500).json({ message: "Failed to generate preview URL" });
+  }
+};
+
+export const checkDuplicateProfileUpload = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const context = getTenantContext(req);
+    if (!context) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    const openingId = req.params.id;
+    const fileHash = String(req.body?.fileHash || "").trim();
+    if (!fileHash) {
+      res.status(400).json({ message: "fileHash is required" });
+      return;
+    }
+
+    const existing = await prisma.hiringProfile.findFirst({
+      where: {
+        openingId,
+        fileHash,
+        uploadedBy: context.userId,
+        isDeleted: false,
+        opening: {
+          tenantId: context.tenantId,
+        },
+      },
+      select: {
+        id: true,
+      },
+      orderBy: { submittedAt: "desc" },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isDuplicate: Boolean(existing),
+      },
+    });
+  } catch (error) {
+    logStructured("vendor_duplicate_check_failed", {
+      openingId: req.params.id,
+      tenantId: req.user?.tenant?.tenantId,
+      userId: req.user?.id,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    res.status(500).json({ message: "Failed to check duplicate profile" });
   }
 };

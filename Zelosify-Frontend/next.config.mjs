@@ -17,12 +17,6 @@ const nextConfig = {
     },
   },
 
-  // Improve error reporting for debugging
-  onDemandEntries: {
-    // Make dev server more reliable
-    maxInactiveAge: 25 * 1000,
-    pagesBufferLength: 5,
-  },
 };
 
 export default nextConfig;

@@ -3,6 +3,7 @@
 import express from "express";
 import { listOfObjects } from "../../controllers/controllers.js";
 import { authenticateUser } from "../../middlewares/auth/authenticateMiddleware.js";
+import { authorizeRole } from "../../middlewares/auth/authorizeMiddleware.js";
 
 const router = express.Router();
 
@@ -13,6 +14,11 @@ const router = express.Router();
  */
 
 // GET /api/v1/aws/list - List all objects stored in the S3 bucket
-router.get("/list", authenticateUser, listOfObjects as any);
+router.get(
+	"/list",
+	authenticateUser,
+	authorizeRole("IT_VENDOR") as any,
+	listOfObjects as any
+);
 
 export default router;

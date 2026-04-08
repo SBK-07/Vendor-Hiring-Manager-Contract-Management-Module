@@ -27,10 +27,18 @@ export const verifyTOTP = async (
       return;
     }
 
-    const { userId, refreshToken } = decoded;
+    const { userId, refreshToken, tenantId } = decoded;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
+    if (!tenantId) {
+      res.status(401).json({ message: "Tenant context missing in temp token" });
+      return;
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        tenantId: String(tenantId),
+      },
       select: {
         id: true,
         username: true,
@@ -107,6 +115,12 @@ export const verifyTOTP = async (
       res.json({
         message: "TOTP verified successfully. Login successful.",
         user: userData,
+        accessToken: tokenResponse.data.access_token,
+        refreshToken: tokenResponse.data.refresh_token,
+        authContext: {
+          userId: user.id,
+          tenantId: user.tenant?.tenantId || String(tenantId),
+        },
       });
     } catch (error: any) {
       console.error(

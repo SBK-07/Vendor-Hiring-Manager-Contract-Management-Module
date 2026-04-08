@@ -32,4 +32,11 @@ export {
 } from "./vendor/resourceRequest/vendorRequestController.js";
 
 // ===== HIRING MANAGEMENT =====
-export { fetchData } from "./hiring/hiringProfileController.js";
+export {
+  getProfileResumeUrl,
+  getHiringManagerOpenings,
+  getOpeningProfilesForHiringManager,
+  shortlistProfile,
+  rejectProfile,
+  retryProfileRecommendation,
+} from "./hiring/hiringManagerController.js";

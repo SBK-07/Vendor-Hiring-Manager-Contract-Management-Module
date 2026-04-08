@@ -35,6 +35,12 @@ export const register = asyncHandler(
         role,
       } = req.body;
 
+      const actorTenantId = (req as any).user?.tenant?.tenantId || null;
+      if (actorTenantId && actorTenantId !== tenantId) {
+        res.status(403).json({ message: "Tenant mismatch" });
+        return;
+      }
+
       if (
         !username ||
         !email ||
@@ -52,7 +58,10 @@ export const register = asyncHandler(
 
       // Check if user already exists
       const existingUser = await prisma.user.findFirst({
-        where: { OR: [{ username }, { email }] },
+        where: {
+          tenantId,
+          OR: [{ username }, { email }],
+        },
       });
       if (existingUser) {
         res.status(400).json({ message: "User already exists." });

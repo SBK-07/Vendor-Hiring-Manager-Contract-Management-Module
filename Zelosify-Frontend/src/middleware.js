@@ -3,6 +3,7 @@ import { extractRoleFromToken, isTokenExpired } from "@/utils/Auth/middlewareUti
 
 const roleHomeRouteMap = {
   IT_VENDOR: "/vendor/openings",
+  HIRING_MANAGER: "/hiring-manager/openings",
   BUSINESS_USER: "/business-user/digital-initiative",
   VENDOR_MANAGER: "/user",
 };
@@ -96,6 +97,12 @@ export function middleware(request) {
         console.log(`Redirecting IT_VENDOR to /vendor/openings`);
         return NextResponse.redirect(new URL("/vendor/openings", request.url));
 
+      case "HIRING_MANAGER":
+        console.log(`Redirecting HIRING_MANAGER to /hiring-manager/openings`);
+        return NextResponse.redirect(
+          new URL("/hiring-manager/openings", request.url)
+        );
+
       default:
         // Fallback for unknown roles or missing role - redirect to base user page
         console.log(`Unknown role (${userRole}) - redirecting to /`);
@@ -123,6 +130,11 @@ export function middleware(request) {
       return NextResponse.redirect(new URL(redirectPath, request.url));
     }
 
+    if (path.startsWith("/hiring-manager") && userRole !== "HIRING_MANAGER") {
+      const redirectPath = roleHomeRouteMap[userRole] || "/";
+      return NextResponse.redirect(new URL(redirectPath, request.url));
+    }
+
     if (path.startsWith("/business-user") && userRole !== "BUSINESS_USER") {
       const redirectPath = roleHomeRouteMap[userRole] || "/";
       return NextResponse.redirect(new URL(redirectPath, request.url));
@@ -142,6 +154,7 @@ export const config = {
     // Protected routes
     "/user/:path*",
     "/vendor/:path*",
+    "/hiring-manager/:path*",
     "/business-user/:path*",
 
     // Public paths for redirect logic

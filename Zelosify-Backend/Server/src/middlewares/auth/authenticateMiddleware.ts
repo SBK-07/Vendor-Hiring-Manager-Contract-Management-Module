@@ -60,15 +60,25 @@ export const authenticateUser = async (
         throw new Error("Token verification failed");
       }
 
+      const resolvedTenantId =
+        (verified as any)?.tenantId ||
+        (verified as any)?.tenant_id ||
+        (verified as any)?.tenant?.tenantId ||
+        null;
+
       // Check cache first
-      const cachedUser = userCache.get(verified.sub);
+      const cacheKey = `${verified.sub}:${resolvedTenantId || "db"}`;
+      const cachedUser = userCache.get(cacheKey);
       if (cachedUser && cachedUser.timestamp > Date.now() - USER_CACHE_TTL) {
         req.user = cachedUser.data;
         return next();
       }
 
-      const user = await prisma.user.findUnique({
-        where: { externalId: verified.sub },
+      const user = await prisma.user.findFirst({
+        where: {
+          externalId: verified.sub,
+          ...(resolvedTenantId ? { tenantId: String(resolvedTenantId) } : {}),
+        },
         select: {
           id: true,
           username: true,
@@ -92,7 +102,7 @@ export const authenticateUser = async (
       }
 
       // Update cache
-      userCache.set(verified.sub, {
+      userCache.set(cacheKey, {
         data: user,
         timestamp: Date.now(),
       });

@@ -13,11 +13,14 @@ import LoginForm from "./LoginForm";
 
 export default function LoginLayout() {
   const [formData, setFormData] = useState({
+    tenantName: "",
     usernameOrEmail: "",
     password: "",
     totp: "",
   });
   const [error, setError] = useState({});
+  const [tenantOptions, setTenantOptions] = useState([]);
+  const [tenantsLoading, setTenantsLoading] = useState(false);
   const [loginStage, setLoginStage] = useState("credentials"); // 'credentials' or 'totp'
 
   // Use our custom auth hook instead of direct Redux access
@@ -55,7 +58,37 @@ export default function LoginLayout() {
   }, [user, loginStage]);
 
   const handleChange = useCallback((e) => {
-    setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    setError((prev) => {
+      if (!prev[name]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const fetchTenants = async () => {
+      setTenantsLoading(true);
+      try {
+        const response = await axiosInstance.get("/public/tenants");
+        const options = Array.isArray(response.data?.data)
+          ? response.data.data
+              .map((item) => String(item?.companyName || "").trim())
+              .filter(Boolean)
+          : [];
+        setTenantOptions(options);
+      } catch (fetchError) {
+        setTenantOptions([]);
+      } finally {
+        setTenantsLoading(false);
+      }
+    };
+
+    fetchTenants();
   }, []);
 
   const handleSubmit = useCallback(
@@ -64,10 +97,16 @@ export default function LoginLayout() {
       setError({});
 
       if (loginStage === "credentials") {
+        if (!formData.tenantName?.trim()) {
+          setError({ tenantName: "Company Name is required" });
+          return;
+        }
+
         // Step 1: Verify username/email and password
         try {
           console.log("Verifying credentials for:", formData.usernameOrEmail);
           const resultAction = await handleLogin({
+            tenantName: formData.tenantName.trim(),
             usernameOrEmail: formData.usernameOrEmail,
             password: formData.password,
           });
@@ -183,11 +222,14 @@ export default function LoginLayout() {
       )}
 
       <LoginForm
+        formData={formData}
         handleChange={handleChange}
         handleSubmit={handleSubmit}
         loginStage={loginStage}
         isLoading={isLoading}
         error={error}
+        tenantOptions={tenantOptions}
+        tenantsLoading={tenantsLoading}
         showPassword={showPassword}
         setShowPassword={setShowPassword}
         setLoginStage={setLoginStage}

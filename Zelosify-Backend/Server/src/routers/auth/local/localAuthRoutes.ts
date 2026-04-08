@@ -16,6 +16,8 @@ import {
   verifyTOTP,
 } from "../../../controllers/controllers.js";
 import { AuthenticatedRequest } from "../../../types/common.js";
+import { authenticateUser } from "../../../middlewares/auth/authenticateMiddleware.js";
+import { authorizeRole } from "../../../middlewares/auth/authorizeMiddleware.js";
 
 /**
  * Wraps async handlers to ensure void return type
@@ -74,7 +76,12 @@ router.post("/refresh-token", wrapHandler(refreshAccessToken));
  * GET /debug/token - Temporary token/DB mapping diagnostics endpoint
  * Requires AUTH_DEBUG_ENDPOINT_ENABLED=true in backend env.
  */
-router.get("/debug/token", wrapHandler(getTokenDebugInfo));
+router.get(
+  "/debug/token",
+  authenticateUser,
+  authorizeRole("ADMIN") as RequestHandler,
+  wrapHandler(getTokenDebugInfo)
+);
 
 /**
  * POST /logout - Logout authenticated user

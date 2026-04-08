@@ -2,9 +2,11 @@
 import { Readable } from "stream";
 
 export abstract class StorageService {
-  abstract getObjectURL(key: string): Promise<string>;
+  abstract getObjectURL(key: string, expiresInSeconds?: number): Promise<string>;
 
   abstract getObjectStream(key: string): Promise<Readable>;
+
+  abstract deleteObject(key: string): Promise<{ message: string }>;
 
   abstract putObject(
     key: string,

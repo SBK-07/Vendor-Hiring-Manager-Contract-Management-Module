@@ -31,6 +31,8 @@ export const getRoleRedirectPath = (role) => {
       return "/business-user/digital-initiative";
     case "IT_VENDOR":
       return "/vendor/openings";
+    case "HIRING_MANAGER":
+      return "/hiring-manager/openings";
     default:
       return "/login"; // Let middleware handle it
   }
@@ -60,4 +62,7 @@ export const clearAuthData = () => {
 
   // Clear localStorage
   localStorage.removeItem("zelosify_user");
+  localStorage.removeItem("accessToken");
+  localStorage.removeItem("refreshToken");
+  localStorage.removeItem("authContext");
 };
